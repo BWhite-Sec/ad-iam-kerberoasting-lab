@@ -1,0 +1,28 @@
+// Detection: Kerberoasting - RC4-Encrypted Service Ticket Request
+// MITRE ATT&CK: T1558.003 - Steal or Forge Kerberos Tickets: Kerberoasting
+// Description: Flags Kerberos service ticket requests (Event ID 4769) where
+//              the issued ticket is encrypted with RC4-HMAC (encryption type
+//              0x17) rather than a modern AES cipher. Legitimate, properly
+//              configured service accounts negotiate AES by default; an RC4
+//              ticket is a strong indicator that either (a) the target
+//              account does not support AES (a configuration gap), or (b)
+//              an attacker is deliberately forcing a downgrade to obtain a
+//              crackable ticket. Excludes krbtgt (TGT renewal noise) and
+//              machine accounts (normal computer-to-computer Kerberos
+//              traffic), which are not roastable targets.
+//
+// Data source: WinEventLog (Windows Security log) on the Domain Controller,
+//              EventCode 4769
+
+index=ad EventCode=4769
+| rex field=_raw "Ticket Encryption Type:\s+(?<TicketEncryptionType>0x\w+)"
+| search TicketEncryptionType="0x17" NOT Service_Name="krbtgt" NOT Service_Name="*$"
+| table _time Account_Name Service_Name Client_Address TicketEncryptionType
+| sort -_time
+
+// --- Alert configuration used in this lab ---
+// Schedule:          Cron */5 * * * * (every 5 minutes)
+// Trigger condition:  Number of results > 0
+// Trigger action:     Add to Triggered Alerts
+// Severity:           High (RC4 ticket against a non-machine account is a
+//                      direct Kerberoasting indicator)
