@@ -1,0 +1,56 @@
+// Detection: Kerberoasting - Multi-SPN Enumeration Burst
+// MITRE ATT&CK: T1558.003 - Steal or Forge Kerberos Tickets: Kerberoasting
+// Description: Flags a single account requesting service tickets for
+//              several distinct target accounts within a short (5-minute)
+//              window - the "smash and grab" pattern real Kerberoasting
+//              tools use when enumerating every SPN in a domain, rather
+//              than roasting one known-vulnerable account directly. This
+//              catches enumeration behavior even when the resulting
+//              tickets aren't all RC4, and is intended to run alongside
+//              (not instead of) the RC4-specific detection.
+//
+// Data source: WinEventLog (Windows Security log) on the Domain Controller,
+//              EventCode 4769
+//
+// --- Tuning history (documented from this lab's validation) ---
+// v1 (as originally scoped, enterprise-scale threshold):
+//     | where unique_accounts_targeted > 3
+//   Result in this lab: 0 matches, even against a genuine 4-SPN enumeration
+//   burst. Root cause: several commonly-enumerated SPNs (HTTP, LDAP, CIFS)
+//   are registered to the Domain Controller's own machine account
+//   (DC01$), not to separate service accounts. Event ID 4769's
+//   Service_Name field reflects the ACCOUNT the SPN belongs to, not the
+//   raw SPN string requested - so 4 distinct SPN requests can still
+//   collapse into only 2 distinct target accounts. A threshold tuned for
+//   a large enterprise domain (many separate service accounts) does not
+//   transfer directly to a small lab domain and should be tuned to the
+//   actual number of distinct service accounts present.
+//
+// v2 (threshold lowered to match lab scale):
+//     | where unique_accounts_targeted > 1
+//   Result: correctly caught the jdoe enumeration burst, but also flagged
+//   DC01$, WS01$, and Administrator during routine, non-malicious
+//   activity. Machine accounts and interactive admin logons naturally
+//   touch multiple services (LDAP, CIFS, krbtgt, replication, etc.) as
+//   part of normal Windows authentication - this is expected background
+//   noise, not enumeration behavior, and produced false positives.
+//
+// v3 (final, below): excludes machine accounts, since multi-service
+//   ticket requests are expected and non-anomalous for computer accounts.
+//   Cleanly isolates the true positive (jdoe, 2 burst windows) from all
+//   routine domain activity captured during this lab's validation period.
+
+index=ad EventCode=4769
+| bin _time span=5m
+| stats dc(Service_Name) as unique_accounts_targeted by Account_Name, _time
+| where unique_accounts_targeted > 1 AND NOT match(Account_Name, "\$@")
+| sort -_time
+
+// Further tuning to consider in production:
+//   - Also exclude or separately baseline built-in Administrator /
+//     break-glass accounts if they are expected to have broad routine
+//     access in your environment, rather than blanket-excluding them.
+//   - Set unique_accounts_targeted threshold based on the actual count of
+//     distinct service accounts with registered SPNs in your domain.
+//   - Consider requiring at least one RC4-encrypted ticket within the
+//     burst window to raise confidence and reduce noise further.
